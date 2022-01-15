@@ -1,0 +1,3 @@
+icon = gui/icons/test_mod_icon.png
+name = CorporateWar
+author = RaXaH
