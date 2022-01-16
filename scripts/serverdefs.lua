@@ -1,6 +1,7 @@
 local util = include("client_util")
 local agentdefs = include("sim/unitdefs/agentdefs")
 local rand = include( "modules/rand" )
+local simdefs = include("sim/simdefs")
 
 local serverdefs = include( "modules/serverdefs" )
 
@@ -199,51 +200,67 @@ local SITUATIONS_CW =
 {
 	default =
 	{
-		duration = {min=1440, max=1920},		--how long will that situation be available on the map in minutes
+		duration = 1440,		--how long will that situation be available on the map in minutes
+		intel_threshold = {min=3300, max=4300},
 		infiltration_time = 720,			--infiltration time in minutes needed for 100%
 		infiltration_penalty = {0, 120, 180, 240},	--additional infiltration time needed in minutes for 1st, 2nd, 3rd, 4th agent
+		random_weight = 0,
 	},
 	vault =
 	{
-		duration = {min=1440, max=1920},
+		duration = 1440,
+		intel_threshold = {min=3300, max=4300},
 		infiltration_time = 720,
 		infiltration_penalty = {0, 120, 180, 240},
+		random_weight = 1,
 	},
 	server_farm =
 	{
-		duration = {min=1440, max=1920},
+		duration = 1440,
+		intel_threshold = {min=3300, max=4300},
 		infiltration_time = 720,
 		infiltration_penalty = {0, 120, 180, 240},
+		random_weight = 1,
 	},
 	nanofab =
 	{
-		duration = {min=1440, max=1920},
+		duration = 1440,
+		intel_threshold = {min=3300, max=4300},
 		infiltration_time = 720,
 		infiltration_penalty = {0, 120, 180, 240},
+		random_weight = 1,
 	},
 	detention_centre =
 	{
-		duration = {min=1440, max=1920},
+		duration = 1440,
+		intel_threshold = {min=3300, max=4300},
 		infiltration_time = 720,
 		infiltration_penalty = {0, 120, 180, 240},
+		random_weight = 1,
 	},
 	ceo_office =
 	{
-		duration = {min=1440, max=1920},
+		duration = 1440,
+		intel_threshold = {min=3300, max=4300},
 		infiltration_time = 720,
 		infiltration_penalty = {0, 120, 180, 240},
+		random_weight = 0
 	},
 	cyberlab =
 	{
-		duration = {min=1440, max=1920},
+		duration = 1440,
+		intel_threshold = {min=3300, max=4300},
 		infiltration_time = 720,
 		infiltration_penalty = {0, 120, 180, 240},
+		random_weight = 1,
 	},
 	executive_terminals =
 	{
-		duration = {min=1440, max=1920},
+		duration = 1440,
+		intel_threshold = {min=3300, max=4300},
 		infiltration_time = 720,
 		infiltration_penalty = {0, 120, 180, 240},
+		random_weight = 0,
 	},
 
 }
@@ -313,21 +330,400 @@ end
 --Personel can have jobs assigned, which gives a benefit for the region they are in.
 --Main purpose of this is to have them collect intel, to find missions. Intel can be collected towards a certain mission type. This is, so run variance is decreased, since getting detention centres early on will be extremely important in this mode.
 --But additional activities can be implemented as wished, like collecting credits, crafting items, maybe in far far future: do research...
+serverdefs.ALL_ACTIVITIES = {"ready", "intel_random", "intel_vault", "intel_server_farm", "intel_nanofab", "intel_detention_centre", "intel_cyberlab", "transfer_region"}
+serverdefs.TRANSFER_ACTIVITIES = {"ready", "to_ftm", "to_sankaku", "to_ko", "to_plastech"}
+
 local PERSONEL_ACTIVITIES =
 {
 	ready =
 	{
-		ui = STRINGS.C_WAR.UI.PERSONEL_ACTIVITIES.READY,
+		ui = STRINGS.C_WAR.PERSONEL_ACTIVITIES.READY,
 		onMinutePassed = function(self, personel, campaign)
 
 		end,
 		getAvailableActivities = function(self, personel, campaign)
-			local activities =
-			{
-
-			}
+			local activities = serverdefs.ALL_ACTIVITIES
 
 			return activities
+		end,
+		onSelectAbility = function(self, personel, campaign)
+			print("ready assigned")
+		end,
+		onTooltip = function(self, tooltip, personel, campaign)
+			local corp = personel.assignedRegion
+			local section = tooltip:addSection()
+			section:addLine(STRINGS.C_WAR.PERSONEL_ACTIVITIES.READY)
+			section:addDesc(STRINGS.C_WAR.PERSONEL_ACTIVITIES.READY_DESC)
+		end,
+	},
+
+	intel_random =
+	{
+		ui = STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_RANDOM,
+		onMinutePassed = function(self, personel, campaign)
+			local corp = personel.assignedRegion
+			if campaign.corpProgress[corp].situation_intel["random"] then
+				if campaign.corpProgress[corp].situation_intel["random"].presented then
+					campaign.corpProgress[corp].situation_intel["random"] = nil
+				end
+			end
+			if not campaign.corpProgress[corp].situation_intel["random"] then
+				--create new situation
+				local gen = rand.createGenerator( campaign.seed )
+				local situation_choices = util.weighted_list()
+				for situation_name, potential_situation in pairs(serverdefs.SITUATIONS) do
+					if potential_situation.random_weight > 0 then
+						situation_choices:addChoice( potential_situation.tags, potential_situation.random_weight )
+					end
+				end
+				local wt = gen:nextInt(1, situation_choices:getTotalWeight())
+				local situation_location = situation_choices:getChoice( wt )[1]
+				local tags = {situation_location, corp}
+				local day = math.floor(campaign.game_time/1440) +1
+				campaign.seed = gen._seed --do it here, before createCampaignSituations messes with it again
+				serverdefs.createCampaignSituations( campaign, 1, tags, day )
+				campaign.corpProgress[corp].situation_intel["random"] = campaign.situations[#campaign.situations]
+			end
+			campaign.corpProgress[corp].situation_intel["random"].intel = campaign.corpProgress[corp].situation_intel["random"].intel + 4
+		end,
+		getAvailableActivities = function(self, personel, campaign)
+			local activities = serverdefs.ALL_ACTIVITIES
+
+			return activities
+		end,
+		onSelectAbility = function(self, personel, campaign)
+			print("intel random assigned")
+		end,
+		onTooltip = function(self, tooltip, personel, campaign)
+			local corp = personel.assignedRegion
+			local section = tooltip:addSection()
+			section:addLine(STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_RANDOM)
+			section:addDesc( util.sformat(STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_RANDOM_DESC, serverdefs.HEAD_CORP_TEMPLATES[corp].stringTable.SHORTNAME) )
+		end,
+	},
+
+	intel_vault =
+	{
+		ui = STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_VAULT,
+		onMinutePassed = function(self, personel, campaign)
+			local corp = personel.assignedRegion
+			if campaign.corpProgress[corp].situation_intel["vault"] then
+				if campaign.corpProgress[corp].situation_intel["vault"].presented then
+					campaign.corpProgress[corp].situation_intel["vault"] = nil
+				end
+			end
+			if not campaign.corpProgress[corp].situation_intel["vault"] then
+				--create new situation
+				local situation_location = "vault"
+				local tags = {situation_location, corp}
+				local day = math.floor(campaign.game_time/1440) +1
+				serverdefs.createCampaignSituations( campaign, 1, tags, day )
+				campaign.corpProgress[corp].situation_intel["vault"] = campaign.situations[#campaign.situations]
+			end
+			campaign.corpProgress[corp].situation_intel["vault"].intel = campaign.corpProgress[corp].situation_intel["vault"].intel + 3
+		end,
+		getAvailableActivities = function(self, personel, campaign)
+			local activities = serverdefs.ALL_ACTIVITIES
+
+			return activities
+		end,
+		onSelectAbility = function(self, personel, campaign)
+			print("intel vault assigned")
+		end,
+		onTooltip = function(self, tooltip, personel, campaign)
+			local corp = personel.assignedRegion
+			local section = tooltip:addSection()
+			section:addLine(STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_VAULT)
+			section:addDesc( util.sformat(STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_VAULT_DESC, serverdefs.HEAD_CORP_TEMPLATES[corp].stringTable.SHORTNAME) )
+		end,
+	},
+
+	intel_server_farm =
+	{
+		ui = STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_SERVER_FARM,
+		onMinutePassed = function(self, personel, campaign)
+			local corp = personel.assignedRegion
+			if campaign.corpProgress[corp].situation_intel["server_farm"] then
+				if campaign.corpProgress[corp].situation_intel["server_farm"].presented then
+					campaign.corpProgress[corp].situation_intel["server_farm"] = nil
+				end
+			end
+			if not campaign.corpProgress[corp].situation_intel["server_farm"] then
+				--create new situation
+				local situation_location = "server_farm"
+				local tags = {situation_location, corp}
+				local day = math.floor(campaign.game_time/1440) +1
+				serverdefs.createCampaignSituations( campaign, 1, tags, day )
+				campaign.corpProgress[corp].situation_intel["server_farm"] = campaign.situations[#campaign.situations]
+			end
+			campaign.corpProgress[corp].situation_intel["server_farm"].intel = campaign.corpProgress[corp].situation_intel["server_farm"].intel + 3
+		end,
+		getAvailableActivities = function(self, personel, campaign)
+			local activities = serverdefs.ALL_ACTIVITIES
+
+			return activities
+		end,
+		onSelectAbility = function(self, personel, campaign)
+			print("intel server_farm assigned")
+		end,
+		onTooltip = function(self, tooltip, personel, campaign)
+			local corp = personel.assignedRegion
+			local section = tooltip:addSection()
+			section:addLine(STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_SERVER_FARM)
+			section:addDesc( util.sformat(STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_SERVER_FARM_DESC, serverdefs.HEAD_CORP_TEMPLATES[corp].stringTable.SHORTNAME) )
+		end,
+	},
+
+	intel_nanofab =
+	{
+		ui = STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_NANOFAB,
+		onMinutePassed = function(self, personel, campaign)
+			local corp = personel.assignedRegion
+			if campaign.corpProgress[corp].situation_intel["nanofab"] then
+				if campaign.corpProgress[corp].situation_intel["nanofab"].presented then
+					campaign.corpProgress[corp].situation_intel["nanofab"] = nil
+				end
+			end
+			if not campaign.corpProgress[corp].situation_intel["nanofab"] then
+				--create new situation
+				local situation_location = "nanofab"
+				local tags = {situation_location, corp}
+				local day = math.floor(campaign.game_time/1440) +1
+				serverdefs.createCampaignSituations( campaign, 1, tags, day )
+				campaign.corpProgress[corp].situation_intel["nanofab"] = campaign.situations[#campaign.situations]
+			end
+			campaign.corpProgress[corp].situation_intel["nanofab"].intel = campaign.corpProgress[corp].situation_intel["nanofab"].intel + 3
+		end,
+		getAvailableActivities = function(self, personel, campaign)
+			local activities = serverdefs.ALL_ACTIVITIES
+
+			return activities
+		end,
+		onSelectAbility = function(self, personel, campaign)
+			print("intel nanofab assigned")
+		end,
+		onTooltip = function(self, tooltip, personel, campaign)
+			local corp = personel.assignedRegion
+			local section = tooltip:addSection()
+			section:addLine(STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_NANOFAB)
+			section:addDesc( util.sformat(STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_NANOFAB_DESC, serverdefs.HEAD_CORP_TEMPLATES[corp].stringTable.SHORTNAME) )
+		end,
+	},
+
+	intel_detention_centre =
+	{
+		ui = STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_DETENTION_CENTRE,
+		onMinutePassed = function(self, personel, campaign)
+			local corp = personel.assignedRegion
+			if campaign.corpProgress[corp].situation_intel["detention_centre"] then
+				if campaign.corpProgress[corp].situation_intel["detention_centre"].presented then
+					campaign.corpProgress[corp].situation_intel["detention_centre"] = nil
+				end
+			end
+			if not campaign.corpProgress[corp].situation_intel["detention_centre"] then
+				--create new situation
+				local situation_location = "detention_centre"
+				local tags = {situation_location, corp}
+				local day = math.floor(campaign.game_time/1440) +1
+				serverdefs.createCampaignSituations( campaign, 1, tags, day )
+				campaign.corpProgress[corp].situation_intel["detention_centre"] = campaign.situations[#campaign.situations]
+			end
+			campaign.corpProgress[corp].situation_intel["detention_centre"].intel = campaign.corpProgress[corp].situation_intel["detention_centre"].intel + 3
+		end,
+		getAvailableActivities = function(self, personel, campaign)
+			local activities = serverdefs.ALL_ACTIVITIES
+
+			return activities
+		end,
+		onSelectAbility = function(self, personel, campaign)
+			print("intel detention_centre assigned")
+		end,
+		onTooltip = function(self, tooltip, personel, campaign)
+			local corp = personel.assignedRegion
+			local section = tooltip:addSection()
+			section:addLine(STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_DETENTION_CENTRE)
+			section:addDesc( util.sformat(STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_DETENTION_CENTRE_DESC, serverdefs.HEAD_CORP_TEMPLATES[corp].stringTable.SHORTNAME) )
+		end,
+	},
+
+	intel_cyberlab =
+	{
+		ui = STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_CYBERLAB,
+		onMinutePassed = function(self, personel, campaign)
+			local corp = personel.assignedRegion
+			if campaign.corpProgress[corp].situation_intel["cyberlab"] then
+				if campaign.corpProgress[corp].situation_intel["cyberlab"].presented then
+					campaign.corpProgress[corp].situation_intel["cyberlab"] = nil
+				end
+			end
+			if not campaign.corpProgress[corp].situation_intel["cyberlab"] then
+				--create new situation
+				local situation_location = "cyberlab"
+				local tags = {situation_location, corp}
+				local day = math.floor(campaign.game_time/1440) +1
+				serverdefs.createCampaignSituations( campaign, 1, tags, day )
+				campaign.corpProgress[corp].situation_intel["cyberlab"] = campaign.situations[#campaign.situations]
+			end
+			campaign.corpProgress[corp].situation_intel["cyberlab"].intel = campaign.corpProgress[corp].situation_intel["cyberlab"].intel + 3
+		end,
+		getAvailableActivities = function(self, personel, campaign)
+			local activities = serverdefs.ALL_ACTIVITIES
+
+			return activities
+		end,
+		onSelectAbility = function(self, personel, campaign)
+			print("intel cyberlab assigned")
+		end,
+		onTooltip = function(self, tooltip, personel, campaign)
+			local corp = personel.assignedRegion
+			local section = tooltip:addSection()
+			section:addLine(STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_CYBERLAB)
+			section:addDesc( util.sformat(STRINGS.C_WAR.PERSONEL_ACTIVITIES.INTEL_CYBERLAB_DESC, serverdefs.HEAD_CORP_TEMPLATES[corp].stringTable.SHORTNAME) )
+		end,
+	},
+
+	transfer_region =
+	{
+		ui = STRINGS.C_WAR.PERSONEL_ACTIVITIES.TRANSFER_REGION,
+		onMinutePassed = function(self, personel, campaign) end,
+		getAvailableActivities = function(self, personel, campaign)
+			local activities = serverdefs.TRANSFER_ACTIVITIES
+			for index, activity in ipairs(activities) do
+				if activity == "to_" .. personel.assignedRegion then
+					table.remove(activities, index)
+					break
+				end
+			end
+
+			return activities
+		end,
+		onSelectAbility = function(self, personel, campaign)
+			print("transfer assigned")
+		end,
+		onTooltip = function(self, tooltip, personel, campaign)
+			local section = tooltip:addSection()
+			section:addLine(STRINGS.C_WAR.PERSONEL_ACTIVITIES.TRANSFER_REGION)
+			section:addDesc( util.sformat(STRINGS.C_WAR.PERSONEL_ACTIVITIES.TRANSFER_REGION_DESC, "3" ) )
+		end,
+	},
+
+	to_ftm =
+	{
+		ui = STRINGS.C_WAR.PERSONEL_ACTIVITIES.TO_FTM,
+		onMinutePassed = function(self, personel, campaign)
+			personel.cooldown = personel.cooldown - 1
+			if personel.cooldown <= 0 then
+				personel.assignedActivity = "ready"
+				personel.assignedRegion = "ftm"
+				personel.cooldown = 0
+			end
+		end,
+		getAvailableActivities = function(self, personel, campaign)
+			local activities = {}
+
+			return activities
+		end,
+		onSelectAbility = function(self, personel, campaign)
+			print("transfer to ftm assigned")
+			personel.cooldown = 180
+		end,
+		onTooltip = function(self, tooltip, personel, campaign)
+			local corp = "ftm"
+			local section = tooltip:addSection()
+			section:addLine(STRINGS.C_WAR.PERSONEL_ACTIVITIES.TO_FTM)
+			local hours = math.floor(personel.cooldown / 60)
+			local minutes = personel.cooldown % 60
+			section:addDesc( util.sformat(STRINGS.C_WAR.PERSONEL_ACTIVITIES.TO_CORP_DESC, serverdefs.HEAD_CORP_TEMPLATES[corp].stringTable.SHORTNAME, string.format(STRINGS.C_WAR.UI.MAP_SCREEN_SITUATION_TIME, hours, minutes) ) )
+		end,
+	},
+
+	to_sankaku =
+	{
+		ui = STRINGS.C_WAR.PERSONEL_ACTIVITIES.TO_SANKAKU,
+		onMinutePassed = function(self, personel, campaign)
+			personel.cooldown = personel.cooldown - 1
+			if personel.cooldown <= 0 then
+				personel.assignedActivity = "ready"
+				personel.assignedRegion = "sankaku"
+				personel.cooldown = 0
+			end
+		end,
+		getAvailableActivities = function(self, personel, campaign)
+			local activities = {}
+
+			return activities
+		end,
+		onSelectAbility = function(self, personel, campaign)
+			print("transfer to ftm assigned")
+			personel.cooldown = 180
+		end,
+		onTooltip = function(self, tooltip, personel, campaign)
+			local corp = "sankaku"
+			local section = tooltip:addSection()
+			section:addLine(STRINGS.C_WAR.PERSONEL_ACTIVITIES.TO_SANKAKU)
+			local hours = math.floor(personel.cooldown / 60)
+			local minutes = personel.cooldown % 60
+			section:addDesc( util.sformat(STRINGS.C_WAR.PERSONEL_ACTIVITIES.TO_CORP_DESC, serverdefs.HEAD_CORP_TEMPLATES[corp].stringTable.SHORTNAME, string.format(STRINGS.C_WAR.UI.MAP_SCREEN_SITUATION_TIME, hours, minutes) ) )
+		end,
+	},
+
+	to_ko =
+	{
+		ui = STRINGS.C_WAR.PERSONEL_ACTIVITIES.TO_KO,
+		onMinutePassed = function(self, personel, campaign)
+			personel.cooldown = personel.cooldown - 1
+			if personel.cooldown <= 0 then
+				personel.assignedActivity = "ready"
+				personel.assignedRegion = "ko"
+				personel.cooldown = 0
+			end
+		end,
+		getAvailableActivities = function(self, personel, campaign)
+			local activities = {}
+
+			return activities
+		end,
+		onSelectAbility = function(self, personel, campaign)
+			print("transfer to ftm assigned")
+			personel.cooldown = 180
+		end,
+		onTooltip = function(self, tooltip, personel, campaign)
+			local corp = "ko"
+			local section = tooltip:addSection()
+			section:addLine(STRINGS.C_WAR.PERSONEL_ACTIVITIES.TO_KO)
+			local hours = math.floor(personel.cooldown / 60)
+			local minutes = personel.cooldown % 60
+			section:addDesc( util.sformat(STRINGS.C_WAR.PERSONEL_ACTIVITIES.TO_CORP_DESC, serverdefs.HEAD_CORP_TEMPLATES[corp].stringTable.SHORTNAME, string.format(STRINGS.C_WAR.UI.MAP_SCREEN_SITUATION_TIME, hours, minutes) ) )
+		end,
+	},
+
+	to_plastech =
+	{
+		ui = STRINGS.C_WAR.PERSONEL_ACTIVITIES.TO_PLASTECH,
+		onMinutePassed = function(self, personel, campaign)
+			personel.cooldown = personel.cooldown - 1
+			if personel.cooldown <= 0 then
+				personel.assignedActivity = "ready"
+				personel.assignedRegion = "plastech"
+				personel.cooldown = 0
+			end
+		end,
+		getAvailableActivities = function(self, personel, campaign)
+			local activities = {}
+
+			return activities
+		end,
+		onSelectAbility = function(self, personel, campaign)
+			print("transfer to ftm assigned")
+			personel.cooldown = 180
+		end,
+		onTooltip = function(self, tooltip, personel, campaign)
+			local corp = "plastech"
+			local section = tooltip:addSection()
+			section:addLine(STRINGS.C_WAR.PERSONEL_ACTIVITIES.TO_PLASTECH)
+			local hours = math.floor(personel.cooldown / 60)
+			local minutes = personel.cooldown % 60
+			section:addDesc( util.sformat(STRINGS.C_WAR.PERSONEL_ACTIVITIES.TO_CORP_DESC, serverdefs.HEAD_CORP_TEMPLATES[corp].stringTable.SHORTNAME, string.format(STRINGS.C_WAR.UI.MAP_SCREEN_SITUATION_TIME, hours, minutes) ) )
 		end,
 	},
 }
@@ -357,12 +753,17 @@ serverdefs.PERSONEL_ACTIVITIES = PERSONEL_ACTIVITIES
 --	Doing periodical autosaves anyway would also be good (maybe every hour or so?)
 function serverdefs.advanceTimeCustom (campaign, minutes)
 	local gen = rand.createGenerator( campaign.seed )
+	local events = {}
 
 	local old_hour = math.floor(campaign.game_time / 60)
-	campaign.game_time = campaign.game_time + minutes
-	local new_hour = math.floor(campaign.game_time / 60)
+	--campaign.game_time = campaign.game_time + minutes
+	local new_hour = math.floor( (campaign.game_time + minutes) / 60)
 	if old_hour ~= new_hour then
 		--log:write("New Hour!")
+		if math.floor(old_hour / 24) ~= math.floor(new_hour / 24) then
+			local day_new = math.floor(new_hour / 24)
+			table.insert( events, { evType = simdefs.CAMPAIGN_EV.NEW_DAY, evData = {day = day_new} } )
+		end
 	end
 
 	--advance guard level
@@ -372,6 +773,7 @@ function serverdefs.advanceTimeCustom (campaign, minutes)
 
 	while minutes > 0 do
 		minutes = minutes - 1
+		campaign.game_time = campaign.game_time + 1
 		--perform personel activities
 		if campaign.personel then
 			for _, personel in ipairs(campaign.personel) do
@@ -379,6 +781,70 @@ function serverdefs.advanceTimeCustom (campaign, minutes)
 					PERSONEL_ACTIVITIES[personel.assignedActivity]:onMinutePassed(personel, campaign)
 				end
 			end
+		end
+
+		local mark_for_removal = {}
+		for _, situation in ipairs(campaign.situations) do
+			--advance infiltration
+			if situation.is_infiltrating then
+				situation.infiltration_progress = math.min(situation.infiltration_progress + ( 100 / serverdefs.SITUATIONS[situation.name].infiltration_time ), 200)
+			end
+			--situation expired?
+			if situation.spawn_time + serverdefs.SITUATIONS[situation.name].duration < campaign.game_time then
+				table.insert(mark_for_removal, situation)
+				table.insert( events, { evType = simdefs.CAMPAIGN_EV.SITUATION_EXPIRED, evData = {situation = situation} } )
+			end
+			--new situation?
+			if not situation.presented then
+				if situation.intel >= situation.intel_threshold then
+					situation.presented = true
+					table.insert( events, { evType = simdefs.CAMPAIGN_EV.NEW_SITUATION, evData = {situation = situation} } )
+				end
+			end
+		end
+
+		for _, situation_to_remove in ipairs(mark_for_removal) do
+			for index, situation in ipairs(campaign.situations) do
+				if situation_to_remove == situation then
+					table.remove(campaign.situations, index)
+					break
+				end
+			end
+		end
+	end
+
+	campaign.seed = gen._seed
+
+	return events
+end
+
+local baseCreateCampaignSituations = serverdefs.createCampaignSituations
+function serverdefs.createCampaignSituations( campaign, count, tags, difficulty )
+	baseCreateCampaignSituations( campaign, count, tags, difficulty )
+	local gen = rand.createGenerator( campaign.seed )
+	for _, situation in ipairs(campaign.situations) do
+		if not situation.infiltration_progress then
+			situation.infiltration_progress = 0
+		end
+		if not situation.presented then
+			situation.presented = false
+		end
+		if not situation.spawn_time then
+			situation.spawn_time = campaign.game_time or 0
+		end
+		if not situation.is_infiltrating then
+			situation.is_infiltrating = false
+		end
+		if not situation.intel then
+			situation.intel = 0
+		end
+		if not situation.intel_threshold then
+			local min = serverdefs.SITUATIONS[situation.name].intel_threshold.min
+			local max = serverdefs.SITUATIONS[situation.name].intel_threshold.max
+			situation.intel_threshold = gen:nextInt(min, max)
+		end
+		if not situation.loadout then
+			situation.loadout = {-1, -1, -1, -1}
 		end
 	end
 	campaign.seed = gen._seed
@@ -388,6 +854,7 @@ local baseCreateNewCampaign = serverdefs.createNewCampaign
 function serverdefs.createNewCampaign(agency, campaignDifficulty, difficultyOptions)
 	local campaign = baseCreateNewCampaign(agency, campaignDifficulty, difficultyOptions)
 	print("CW campaign creation")
+	campaign.situations = {}
 	campaign.game_time = 0
 	campaign.corpProgress =
 	{
@@ -396,24 +863,28 @@ function serverdefs.createNewCampaign(agency, campaignDifficulty, difficultyOpti
 			guard_level = 1,
 			guard_xp = 0,
 			guard_daemons = {},
+			situation_intel = {},
 		},
 		sankaku =
 		{
 			guard_level = 1,
 			guard_xp = 0,
 			guard_daemons = {},
+			situation_intel = {},
 		},
 		ko =
 		{
 			guard_level = 1,
 			guard_xp = 0,
 			guard_daemons = {},
+			situation_intel = {},
 		},
 		plastech =
 		{
 			guard_level = 1,
 			guard_xp = 0,
 			guard_daemons = {},
+			situation_intel = {},
 		},
 	}
 	campaign.personel = {}

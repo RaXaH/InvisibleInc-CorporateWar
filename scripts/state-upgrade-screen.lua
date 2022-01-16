@@ -188,6 +188,10 @@ end
 
 baseOnLoad = upgradeScreen.onLoad
 function upgradeScreen:onLoad( agency, endless, is_post_mission, suppress_map_intro )
+	--no sim, no campaign here :/
+	self.screen = mui.createScreen( "upgrade_screen.lua" )
+	self._CW_campaign_enabled = self.screen:findWidget("agentSelectPnl")
+
 	--//from Cyberboy2000, AgentReserve Mod
 	for i = #agency.unitDefs, 1, -1 do
 		local unitDef = agency.unitDefs[i]
@@ -209,9 +213,6 @@ function upgradeScreen:onLoad( agency, endless, is_post_mission, suppress_map_in
 	--//
 
 	baseOnLoad( self, agency, endless, is_post_mission, suppress_map_intro )
-
-	--no sim, no campaign here :/
-	self._CW_campaign_enabled = self.screen:findWidget("agentSelectPnl")
 
 	if self._CW_campaign_enabled then
 		self.screen:findWidget("agentSelectTitle"):setText(STRINGS.C_WAR.UI.AGENTS)

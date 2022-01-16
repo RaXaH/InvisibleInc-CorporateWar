@@ -99,11 +99,9 @@ function panel:refresh(primeRefresh)
 				daemonBinder.daemonScroller:setVisible( false )
 			end
 		end
-	end
 
 	oldRefresh(self,primeRefresh)
 
-	if self._hud._game.simCore:getParams().difficultyOptions.CW_CAMPAIGN then
 		for i, widget in _forEachIterator, { name = "enemyAbility", binder = daemonBinder, offset = 0 }, 0 do
 			if i > self.guardHandler.maxDaemons then
 				widget:setVisible(false)
@@ -111,5 +109,8 @@ function panel:refresh(primeRefresh)
 		end
 
 		self.guardHandler.refreshing = false
+
+	else
+		oldRefresh(self,primeRefresh)
 	end
 end

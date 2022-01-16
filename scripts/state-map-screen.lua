@@ -59,6 +59,164 @@ local map_colours_unhighlight =
 	omni = {255/255,175/255,36/255, 1},
 }
 
+--------------------------------
+----Campaign Time Management----
+--------------------------------
+local clock = class()
+
+local PAUSE_TIME = 0
+local NORMAL_TIME = 1
+local FAST_TIME = 2
+
+--TODO: Add a second speedfactor for faster forward?
+function clock:init(campaign)
+	self._campaign = campaign
+
+	self.mode = NORMAL_TIME
+	self.speedfactor = 1000
+
+	self.currentSec = 0
+	self.currentMin = self._campaign.game_time % 60
+	self.currentHour = math.floor(self._campaign.game_time/60) % 24
+	self.currentDay = math.floor(self.currentHour / 24) + 1
+end
+
+function clock:updateClock(pnl)
+	self.currentMin = self._campaign.game_time % 60
+	self.currentHour = math.floor(self._campaign.game_time/60) % 24
+	self.currentDay = math.floor(self.currentHour / 24) + 1
+end
+
+--TODO: I kinda want the hotkeys to be
+--	Space: toggle between pause and last speed
+--	Tab: cycle through speeds pause->normal->fast->pause
+--	Need to figure out how to give a button two hotkeys. Maybe add a dummy button?
+function mapScreen:onClickScan(mode)
+	self._screen:findWidget("scanPauseBtn"):setColor(0.956862745, 1, 0.470588235, 0.588235318660736)
+	self._screen:findWidget("scanForBtn"):setColor(0.956862745, 1, 0.470588235, 0.588235318660736)
+	self._screen:findWidget("scanFastBtn"):setColor(0.956862745, 1, 0.470588235, 0.588235318660736)
+	self._screen:findWidget("scanForBtn"):setHotkey()
+	self._screen:findWidget("scanFastBtn"):setHotkey()
+
+	if mode == PAUSE_TIME then
+		self._screen:findWidget("scanForBtn"):setHotkey( mui_defs.K_TAB )
+	else
+		self._screen:findWidget("scanFastBtn"):setHotkey( mui_defs.K_TAB )
+	end
+
+	self._clock.mode = mode
+
+	if mode == PAUSE_TIME then
+		self._screen:findWidget("scanPauseBtn"):setColor(1, 1, 1, 1)
+	elseif mode == NORMAL_TIME then
+		self._screen:findWidget("scanForBtn"):setColor(1, 1, 1, 1)
+	else
+		self._screen:findWidget("scanFastBtn"):setColor(1, 1, 1, 1)
+	end
+end
+
+--Handling campaign events this way. Maybe not ideal and an actual observer pattern might be better. idk
+function mapScreen:campaignEventHandler( events )
+	for _, event in ipairs(events) do
+		--New day event
+		--Do new day animation here
+		--Do story popups here
+		--Do a day summary here (maybe?)
+		--Refresh monsters shop here?
+		if event.evType == simdefs.CAMPAIGN_EV.NEW_DAY then
+			print(tostring(event.evData.day))
+			--self:onClickScan( PAUSE_TIME )
+		elseif event.evType == simdefs.CAMPAIGN_EV.NEW_SITUATION then
+			self:onClickScan( PAUSE_TIME )
+			rig_util.wait(0.3*cdefs.SECONDS)
+			local x,y = self:addLocation(event.evData.situation, true)
+			MOAIFmodDesigner.playSound( "SpySociety/HUD/menu/map_locations", nil,nil,{x,y,0})
+		elseif event.evType == simdefs.CAMPAIGN_EV.SITUATION_EXPIRED then
+			for _, agent in ipairs(event.evData.situation.loadout) do
+				if agent ~= -1 then
+					self._campaign.agency.unitDefs[agent].on_mission = false
+				end
+			end
+		end
+	end
+end
+
+--This needs to be overwritten. Vanilla doesnt really care about time, so...
+local baseStartCountdownTimer = mapScreen.StartCountdownTimer
+function mapScreen:StartCountdownTimer()
+	if self._campaign.difficultyOptions.CW_CAMPAIGN then
+		local pnl = self._screen.binder.pnl
+		local currentSec = 0
+		local currentMin = self._campaign.game_time % 60
+		local currentHour = math.floor(self._campaign.game_time/60) % 24
+		local currentDay = math.floor(currentHour / 24) + 1
+
+		pnl:findWidget("timer"):spoolText(string.format(STRINGS.UI.MAP_SCREEN_DAYS_SPENT, currentDay, currentHour, currentMin, currentSec ))
+		self._timeUpdateThread = MOAICoroutine.new()
+		self._timeUpdateThread:run( function()
+
+			local i = 0
+			local speed = 1
+			while true do
+				if self._clock.mode == FAST_TIME then
+					speed = self._clock.speedfactor
+				elseif self._clock.mode == NORMAL_TIME then
+					speed = 1
+				else
+					speed = 0
+				end
+				i = i + speed
+				if i >= 60 then
+					currentSec = currentSec + math.floor(i/60)
+					i = i % 60
+					if currentSec >= 60 then
+						local events = serverdefs.advanceTimeCustom (self._campaign, math.floor(currentSec/60))
+						self:campaignEventHandler(events)
+						currentMin = currentMin + math.floor(currentSec/60)
+						currentSec = currentSec % 60
+						if currentMin >= 60 then
+							currentHour = currentHour + math.floor(currentMin/60)
+							currentMin = currentMin % 60
+							if currentHour >= 24 then
+								currentDay = currentDay + math.floor(currentHour/24)
+								currentHour = currentHour % 24
+							end
+						end
+					end
+
+					pnl:findWidget("timer"):setText(string.format(STRINGS.UI.MAP_SCREEN_DAYS_SPENT, currentDay, currentHour, currentMin, currentSec ))
+				end
+
+				coroutine.yield()
+			end
+		end )
+
+
+		pnl:findWidget("timeRemaining"):spoolText(util.sformat(STRINGS.UI.MAP_SCREEN_REMAINING, math.max(0, self._campaign.difficultyOptions.maxHours - self._campaign.hours) ))
+		pnl:findWidget("timeRemaining"):setTooltip(STRINGS.UI.MAP_SCREEN_REMAINING_TOOLTIP)
+
+		if self._campaign.difficultyOptions.maxHours == math.huge then
+			pnl:findWidget("timeRemaining"):setVisible( false )
+			pnl:findWidget("timerGroup"):setPosition( pnl:findWidget("timeRemainingGroup"):getPosition() )
+		else
+			pnl:findWidget("timeRemaining"):setVisible( true )
+		end
+
+		if serverdefs.isTimeAttackMode( self._campaign ) then
+		    local totalTime = self._campaign.chessTimeTotal or 0
+			local hr = math.floor( totalTime / (60*60*60) )
+			local min = math.floor( totalTime / (60*60) ) - hr*60
+			local sec = math.floor( totalTime / 60 ) % 60
+			pnl:findWidget("totalPlayTime"):setText( string.format( STRINGS.UI.MAP_SCREEN_TOTAL_PLAY_TIME, hr, min, sec ) )
+			pnl:findWidget("totalPlayTime"):setVisible(true)
+		else
+			pnl:findWidget("totalPlayTime"):setVisible(false)
+		end
+	else
+		baseStartCountdownTimer(self)
+	end
+end
+
 ------------------------------------
 ----Mission Preview Screen Stuff----
 ------------------------------------
@@ -293,6 +451,7 @@ end
 local baseOnClickLocation = mapScreen.OnClickLocation
 function mapScreen:OnClickLocation( situation )
 	if self._campaign.difficultyOptions.CW_CAMPAIGN then
+		self:onClickScan( PAUSE_TIME )
 		local situationData = serverdefs.SITUATIONS[ situation.name ]
 		MOAIFmodDesigner.playSound( "SpySociety/HUD/gameplay/popup" )
 		local screen = mui.createScreen( "CW_mission_preview_dialog.lua" )
@@ -399,138 +558,6 @@ function mapScreen:OnClickLocation( situation )
 	end
 end
 
---------------------------------
-----Campaign Time Management----
---------------------------------
-
-local clock = class()
-
-local PAUSE_TIME = 0
-local NORMAL_TIME = 1
-local FAST_TIME = 2
-
---TODO: Add a second speedfactor for faster forward?
-function clock:init(campaign)
-	self._campaign = campaign
-
-	self.mode = NORMAL_TIME
-	self.speedfactor = 1000
-
-	self.currentSec = 0
-	self.currentMin = self._campaign.game_time % 60
-	self.currentHour = math.floor(self._campaign.game_time/60) % 24
-	self.currentDay = math.floor(self.currentHour / 24) + 1
-end
-
-function clock:updateClock(pnl)
-	self.currentMin = self._campaign.game_time % 60
-	self.currentHour = math.floor(self._campaign.game_time/60) % 24
-	self.currentDay = math.floor(self.currentHour / 24) + 1
-end
-
---TODO: I kinda want the hotkeys to be
---	Space: toggle between pause and last speed
---	Tab: cycle through speeds pause->normal->fast->pause
---	Need to figure out how to give a button two hotkeys. Maybe add a dummy button?
-function mapScreen:onClickScan(mode)
-	self._screen:findWidget("scanPauseBtn"):setColor(0.956862745, 1, 0.470588235, 0.588235318660736)
-	self._screen:findWidget("scanForBtn"):setColor(0.956862745, 1, 0.470588235, 0.588235318660736)
-	self._screen:findWidget("scanFastBtn"):setColor(0.956862745, 1, 0.470588235, 0.588235318660736)
-	self._screen:findWidget("scanForBtn"):setHotkey()
-	self._screen:findWidget("scanFastBtn"):setHotkey()
-
-	if mode == PAUSE_TIME then
-		self._screen:findWidget("scanForBtn"):setHotkey( mui_defs.K_TAB )
-	else
-		self._screen:findWidget("scanFastBtn"):setHotkey( mui_defs.K_TAB )
-	end
-
-	self._clock.mode = mode
-
-	if mode == PAUSE_TIME then
-		self._screen:findWidget("scanPauseBtn"):setColor(1, 1, 1, 1)
-	elseif mode == NORMAL_TIME then
-		self._screen:findWidget("scanForBtn"):setColor(1, 1, 1, 1)
-	else
-		self._screen:findWidget("scanFastBtn"):setColor(1, 1, 1, 1)
-	end
-end
-
---This needs to be overwritten. Vanilla doesnt really care about time, so...
-local baseStartCountdownTimer = mapScreen.StartCountdownTimer
-function mapScreen:StartCountdownTimer()
-	if self._campaign.difficultyOptions.CW_CAMPAIGN then
-		local pnl = self._screen.binder.pnl
-		local currentSec = 0
-		local currentMin = self._campaign.game_time % 60
-		local currentHour = math.floor(self._campaign.game_time/60) % 24
-		local currentDay = math.floor(currentHour / 24) + 1
-
-		pnl:findWidget("timer"):spoolText(string.format(STRINGS.UI.MAP_SCREEN_DAYS_SPENT, currentDay, currentHour, currentMin, currentSec ))
-		self._timeUpdateThread = MOAICoroutine.new()
-		self._timeUpdateThread:run( function()
-
-			local i = 0
-			local speed = 1
-			while true do
-				if self._clock.mode == FAST_TIME then
-					speed = self._clock.speedfactor
-				elseif self._clock.mode == NORMAL_TIME then
-					speed = 1
-				else
-					speed = 0
-				end
-				i = i + speed
-				if i >= 60 then
-					currentSec = currentSec + math.floor(i/60)
-					i = i % 60
-					if currentSec >= 60 then
-						serverdefs.advanceTimeCustom (self._campaign, math.floor(currentSec/60))
-						currentMin = currentMin + math.floor(currentSec/60)
-						currentSec = currentSec % 60
-						if currentMin >= 60 then
-							currentHour = currentHour + math.floor(currentMin/60)
-							currentMin = currentMin % 60
-							if currentHour >= 24 then
-								currentDay = currentDay + math.floor(currentHour/24)
-								currentHour = currentHour % 24
-							end
-						end
-					end
-
-					pnl:findWidget("timer"):setText(string.format(STRINGS.UI.MAP_SCREEN_DAYS_SPENT, currentDay, currentHour, currentMin, currentSec ))
-				end
-
-				coroutine.yield()
-			end
-		end )
-
-
-		pnl:findWidget("timeRemaining"):spoolText(util.sformat(STRINGS.UI.MAP_SCREEN_REMAINING, math.max(0, self._campaign.difficultyOptions.maxHours - self._campaign.hours) ))
-		pnl:findWidget("timeRemaining"):setTooltip(STRINGS.UI.MAP_SCREEN_REMAINING_TOOLTIP)
-
-		if self._campaign.difficultyOptions.maxHours == math.huge then
-			pnl:findWidget("timeRemaining"):setVisible( false )
-			pnl:findWidget("timerGroup"):setPosition( pnl:findWidget("timeRemainingGroup"):getPosition() )
-		else
-			pnl:findWidget("timeRemaining"):setVisible( true )
-		end
-
-		if serverdefs.isTimeAttackMode( self._campaign ) then
-		    local totalTime = self._campaign.chessTimeTotal or 0
-			local hr = math.floor( totalTime / (60*60*60) )
-			local min = math.floor( totalTime / (60*60) ) - hr*60
-			local sec = math.floor( totalTime / 60 ) % 60
-			pnl:findWidget("totalPlayTime"):setText( string.format( STRINGS.UI.MAP_SCREEN_TOTAL_PLAY_TIME, hr, min, sec ) )
-			pnl:findWidget("totalPlayTime"):setVisible(true)
-		else
-			pnl:findWidget("totalPlayTime"):setVisible(false)
-		end
-	else
-		baseStartCountdownTimer(self)
-	end
-end
-
 ---------------------------
 ----Region Screen Stuff----
 ---------------------------
@@ -560,6 +587,33 @@ local function OnRegionSwitch(screen)
 	end
 end
 
+function mapScreen:onActivityChange( entry_str, combobox )
+	print("on activity change")
+	local personel = combobox:getUserData( entry_str ).personel
+	local selectedActivity_str = combobox:getUserData( entry_str ).selectedActivity
+	local selectedActivity = serverdefs.PERSONEL_ACTIVITIES[selectedActivity_str]
+	local screen = combobox:getScreen()
+
+	combobox:findWidget("personelActivitySelect"):setTooltip(
+							function()
+								local tooltip = util.tooltip( screen, nil )
+								if selectedActivity.onTooltip then
+									selectedActivity:onTooltip(tooltip, personel, self._campaign)
+								end
+								return tooltip
+							end )
+
+	personel.assignedActivity = selectedActivity_str
+	if selectedActivity.onSelectAbility then
+		selectedActivity:onSelectAbility(personel, self._campaign)
+	end
+	combobox:findWidget("personelActivitySelect"):clearItems()
+	for _, available_activity in ipairs(selectedActivity:getAvailableActivities(personel, self._campaign)) do
+		local a_activity = serverdefs.PERSONEL_ACTIVITIES[available_activity]
+		combobox:findWidget("personelActivitySelect"):addItem(a_activity.ui, {personel = personel, selectedActivity = available_activity})
+	end
+end
+
 function mapScreen:closeRegionsView(regionsScreen)
 	if self._progressUpdateThread then
 	    self._progressUpdateThread:stop()
@@ -569,8 +623,11 @@ function mapScreen:closeRegionsView(regionsScreen)
 end
 
 function mapScreen:onClickRegions ()
+	self:onClickScan( PAUSE_TIME )
 	MOAIFmodDesigner.playSound( "SpySociety/HUD/gameplay/popup" )
 	local screen = mui.createScreen( "CW_corp_preview.lua" )
+	--self._region_screen = screen
+	region_switch = false
 
 	mui.activateScreen( screen )
 
@@ -610,12 +667,25 @@ function mapScreen:onClickRegions ()
 			entry.binder.daemonDesc:setText(d_name)
 		end
 
-		for i=1, 20 do
-			local entry = lb_personel:addItem(nil , nil)
-			entry.binder.personelActivitySelect:setText(tostring(i))
-			entry.binder.personelActivitySelect:setAlignment(MOAITextBox.LEFT_JUSTIFY, nil)
-			for j=1, 5 do
-				entry.binder.personelActivitySelect:addItem(tostring(j), nil)
+		for _, personel in ipairs(self._campaign.personel) do
+			if personel.assignedRegion == corp then
+				local entry = lb_personel:addItem(nil , nil)
+				local activity = serverdefs.PERSONEL_ACTIVITIES[personel.assignedActivity]
+				entry.binder.personelActivitySelect:setText(activity.ui)
+				entry.binder.personelActivitySelect:setAlignment(MOAITextBox.LEFT_JUSTIFY, nil)
+				entry.binder.personelActivitySelect.onTextChanged = util.makeDelegate(nil, mapScreen.onActivityChange, self)
+				if activity.onTooltip then
+					entry.binder.personelActivitySelect:setTooltip(
+            					function()
+												local tooltip = util.tooltip( screen, nil )
+												activity:onTooltip(tooltip, personel, self._campaign)
+                				return tooltip
+            					end )
+				end
+				for _, available_activity in ipairs(activity:getAvailableActivities(personel, self._campaign)) do
+					local a_activity = serverdefs.PERSONEL_ACTIVITIES[available_activity]
+					entry.binder.personelActivitySelect:addItem(a_activity.ui, {personel = personel, selectedActivity = available_activity})
+				end
 			end
 		end
 	end
@@ -675,12 +745,23 @@ function mapScreen:addLocation(situation, popin)
 		--TODO: Set infiltration progress from the situation data
 		widget.binder.infiltration_label:setText(STRINGS.C_WAR.UI.INFILTRATION_LABEL)
 		widget.binder.infiltration_label:setColor(0.95686274766922, 1, 0.470588237047195, 0.588235318660736)
-		widget.binder.infiltration_progress:setText([[0 %]])
+		widget.binder.infiltration_progress:setText(tostring(math.floor(situation.infiltration_progress)).." %")
+		local hours = math.floor( (situation.spawn_time + serverdefs.SITUATIONS[situation.name].duration - self._campaign.game_time) / 60 )
+		local minutes = (situation.spawn_time + serverdefs.SITUATIONS[situation.name].duration - self._campaign.game_time) % 60
+		widget.binder.situation_duration:setText( string.format(STRINGS.C_WAR.UI.MAP_SCREEN_SITUATION_TIME, hours, minutes) )
 
 		table.insert(self._breachingBlinkThreads, 1, MOAICoroutine.new())
 		self._breachingBlinkThreads[1]:run( function()
+			local _situation = situation
 			local i = 0
 			while true do
+				if _situation.spawn_time + serverdefs.SITUATIONS[situation.name].duration - self._campaign.game_time <= 0 then
+					widget:setVisible(false)
+				end
+				local h = math.floor( (_situation.spawn_time + serverdefs.SITUATIONS[situation.name].duration - self._campaign.game_time) / 60 )
+				local min = (_situation.spawn_time + serverdefs.SITUATIONS[situation.name].duration - self._campaign.game_time) % 60
+				widget.binder.infiltration_progress:setText(tostring(math.floor(_situation.infiltration_progress)).." %")
+				widget.binder.situation_duration:setText( string.format(STRINGS.C_WAR.UI.MAP_SCREEN_SITUATION_TIME, h, min) )
 				i = i + 1
 				if i % 120 == 0 then
 					widget.binder.infiltration_label:setColor(0.95686274766922, 1, 0.470588237047195, 0.588235318660736)
@@ -737,9 +818,25 @@ function mapScreen:addLocation(situation, popin)
 	return x,y
 end
 
+local basePopulateScreen = mapScreen.populateScreen
+function mapScreen:populateScreen()
+	if self._campaign.difficultyOptions.CW_CAMPAIGN then
+		for i,situation in pairs(self._campaign.situations) do
+			if situation.presented then
+				self:addLocation(situation, false)
+			end
+		end
+	else
+		basePopulateScreen(self)
+	end
+end
+
 local baseOnLoad = mapScreen.onLoad
 function mapScreen:onLoad( campaign, suppress_intro )
 	situation_locations = {}
+	if campaign.difficultyOptions.CW_CAMPAIGN then
+		suppress_intro = true
+	end
 
 	baseOnLoad( self, campaign, suppress_intro )
 

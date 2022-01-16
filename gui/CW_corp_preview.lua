@@ -138,7 +138,7 @@ skins =
         images =
         {
           {
-              file = [[white.png]],
+              file = [[gui/profile_icons/security_36.png]],
               name = [[]],
               color =
               {
